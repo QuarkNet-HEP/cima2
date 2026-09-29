@@ -1,5 +1,5 @@
 # The CERN router terminates TLS with a CERN-issued certificate.
-# Set host to the site name you want (e.g. cima.web.cern.ch), or delete the
+# Set host to the site name you want (e.g. cima2.web.cern.ch), or delete the
 # host line to get the default <route>-<project>.app.cern.ch hostname.
 apiVersion: route.openshift.io/v1
 kind: Route
@@ -10,7 +10,7 @@ metadata:
     # Masterclass students connect from their schools, so expose to the Internet.
     router.cern.ch/network-visibility: Internet
 spec:
-  host: cima.web.cern.ch
+  host: cima2.web.cern.ch
   to:
     kind: Service
     name: cima
