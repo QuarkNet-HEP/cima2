@@ -1,0 +1,21 @@
+# One-off job: creates the schema and the default admin account (admin / admin123).
+# Run once after the database exists:
+#   oc create -f openshift/setup-job.yaml && oc logs -f job/cima-setup
+# WARNING: re-running it resets the admin password to admin123.
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: cima-setup
+spec:
+  backoffLimit: 2
+  ttlSecondsAfterFinished: 3600
+  template:
+    spec:
+      restartPolicy: Never
+      containers:
+        - name: setup
+          image: cima:latest
+          command: ["node", "db/setup.js"]
+          envFrom:
+            - secretRef:
+                name: cima-secrets

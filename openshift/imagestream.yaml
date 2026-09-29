@@ -1,0 +1,7 @@
+apiVersion: image.openshift.io/v1
+kind: ImageStream
+metadata:
+  name: cima
+spec:
+  lookupPolicy:
+    local: true   # lets the Deployment refer to the image simply as "cima:latest"

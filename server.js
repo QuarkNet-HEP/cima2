@@ -39,6 +39,17 @@ app.use(helmet({
 
 app.use(compression());
 
+// Liveness/readiness probe for container platforms (OKD/Kubernetes).
+// Registered before sessions so probes never touch the session store.
+app.get('/healthz', async (req, res) => {
+    try {
+        await pool.query('SELECT 1');
+        res.json({ status: 'ok' });
+    } catch (err) {
+        res.status(503).json({ status: 'db-unavailable' });
+    }
+});
+
 // Rate-limit the login endpoint: 10 attempts per 15 minutes per IP
 app.use('/api/auth/login', rateLimit({
     windowMs:         15 * 60 * 1000,
@@ -64,6 +75,7 @@ app.use(express.static(path.join(__dirname, 'public'), {
 // Total: ~72 connections — safe headroom for a 151-connection MariaDB server.
 const DB_CONFIG = {
     host:     process.env.DB_HOST     || 'localhost',
+    port:     parseInt(process.env.DB_PORT, 10) || 3306,
     user:     process.env.DB_USER     || 'root',
     password: process.env.DB_PASSWORD || '',
     database: process.env.DB_NAME     || 'cima',
@@ -73,7 +85,7 @@ const DB_CONFIG = {
 const pool = mysql.createPool({
     ...DB_CONFIG,
     waitForConnections: true,
-    connectionLimit:    15,   // per worker process
+    connectionLimit:    parseInt(process.env.DB_POOL_SIZE, 10) || 15,   // per worker process
     queueLimit:         50,   // reject (don't hang) if >50 requests are waiting
     enableKeepAlive:    true,
     keepAliveInitialDelay: 10000
@@ -432,7 +444,17 @@ const PORT = process.env.PORT || 3000;
 // In production Nginx proxies to 127.0.0.1, so we bind to IPv4 loopback only.
 // In development we also accept ::1 (IPv6 loopback) because macOS resolves
 // 'localhost' to ::1 first; binding to '' (all interfaces) covers both.
-const BIND_HOST = isProd ? '127.0.0.1' : '';
-app.listen(PORT, BIND_HOST, () => {
+// Containers (OKD) set HOST=0.0.0.0 so the platform router can reach the pod.
+const BIND_HOST = process.env.HOST ?? (isProd ? '127.0.0.1' : '');
+const server = app.listen(PORT, BIND_HOST, () => {
     console.log(`[${new Date().toISOString()}] CIMA running on ${BIND_HOST || '0.0.0.0/::'}:${PORT} (${isProd ? 'production' : 'development'})`);
+});
+
+// Finish in-flight requests before exiting when PM2 or OKD stops the process
+process.on('SIGTERM', () => {
+    console.log(`[${new Date().toISOString()}] SIGTERM received, shutting down`);
+    server.close(() => {
+        Promise.allSettled([pool.end(), sessionStore.close()]).then(() => process.exit(0));
+    });
+    setTimeout(() => process.exit(0), 10000).unref();
 });

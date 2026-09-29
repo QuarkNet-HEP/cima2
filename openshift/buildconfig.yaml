@@ -1,0 +1,27 @@
+# Builds the Dockerfile from GitHub inside OKD and pushes to the cima ImageStream.
+# If the repository is private, create a source secret and uncomment sourceSecret:
+#   oc create secret generic github-cima --from-literal=username=<user> \
+#       --from-literal=password=<personal-access-token> --type=kubernetes.io/basic-auth
+apiVersion: build.openshift.io/v1
+kind: BuildConfig
+metadata:
+  name: cima
+spec:
+  source:
+    type: Git
+    git:
+      uri: https://github.com/QuarkNet-HEP/cima2.git
+      ref: cern-deploy   # switch to main once this branch is merged
+    # sourceSecret:
+    #   name: github-cima
+  strategy:
+    type: Docker
+    dockerStrategy:
+      dockerfilePath: Dockerfile
+  output:
+    to:
+      kind: ImageStreamTag
+      name: cima:latest
+  resources:
+    limits:
+      memory: 1Gi

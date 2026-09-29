@@ -1,0 +1,21 @@
+# The CERN router terminates TLS with a CERN-issued certificate.
+# Set host to the site name you want (e.g. cima.web.cern.ch), or delete the
+# host line to get the default <route>-<project>.app.cern.ch hostname.
+apiVersion: route.openshift.io/v1
+kind: Route
+metadata:
+  name: cima
+  annotations:
+    # Default visibility on CERN PaaS is Intranet (CERN network only).
+    # Masterclass students connect from their schools, so expose to the Internet.
+    router.cern.ch/network-visibility: Internet
+spec:
+  host: cima.web.cern.ch
+  to:
+    kind: Service
+    name: cima
+  port:
+    targetPort: http
+  tls:
+    termination: edge
+    insecureEdgeTerminationPolicy: Redirect

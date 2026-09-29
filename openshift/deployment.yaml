@@ -1,0 +1,52 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: cima
+  annotations:
+    # Roll out automatically whenever a new build lands in cima:latest
+    image.openshift.io/triggers: >-
+      [{"from":{"kind":"ImageStreamTag","name":"cima:latest"},"fieldPath":"spec.template.spec.containers[?(@.name==\"cima\")].image"}]
+spec:
+  # Sessions live in the database, so any replica can serve any request.
+  # DB connections used = replicas × (DB_POOL_SIZE + 3 for the session store).
+  replicas: 2
+  selector:
+    matchLabels:
+      app: cima
+  strategy:
+    type: RollingUpdate
+  template:
+    metadata:
+      labels:
+        app: cima
+    spec:
+      containers:
+        - name: cima
+          image: cima:latest
+          ports:
+            - containerPort: 8080
+          env:
+            - name: DB_POOL_SIZE
+              value: "15"
+          envFrom:
+            - secretRef:
+                name: cima-secrets   # SESSION_SECRET, DB_HOST, DB_PORT, DB_USER, DB_PASSWORD, DB_NAME
+          readinessProbe:
+            httpGet:
+              path: /healthz
+              port: 8080
+            periodSeconds: 10
+            failureThreshold: 3
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: 8080
+            initialDelaySeconds: 20
+            periodSeconds: 30
+            failureThreshold: 5
+          resources:
+            requests:
+              cpu: 100m
+              memory: 128Mi
+            limits:
+              memory: 512Mi

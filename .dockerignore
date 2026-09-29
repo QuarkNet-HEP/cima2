@@ -1,0 +1,9 @@
+.git
+.env
+node_modules
+logs
+nginx
+openshift
+ecosystem.config.js
+*.log
+.DS_Store

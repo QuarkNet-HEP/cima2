@@ -20,8 +20,9 @@ tables and mass-distribution histograms.
 7. [Nginx Reverse Proxy](#nginx-reverse-proxy)
 8. [Capacity and Scalability](#capacity-and-scalability)
 9. [Installation](#installation)
-10. [Environment Variables](#environment-variables)
-11. [Development](#development)
+10. [Deploying on CERN PaaS (OKD)](#deploying-on-cern-paas-okd)
+11. [Environment Variables](#environment-variables)
+12. [Development](#development)
 
 ---
 
@@ -540,6 +541,123 @@ pm2 restart cima
 
 ---
 
+## Deploying on CERN PaaS (OKD)
+
+CERN's [PaaS](https://paas.cern.ch) runs OKD 4 (community OpenShift).  The
+container deployment replaces the VM stack like this:
+
+| VM install | On OKD |
+|---|---|
+| Nginx (TLS, static files) | The CERN router terminates TLS with a CERN certificate; Express serves `public/` |
+| PM2 cluster (4 workers) | One Node process per pod; scale with Deployment `replicas` |
+| Local MariaDB | [DBOD](https://dbod.web.cern.ch) MySQL instance (recommended), or the optional in-cluster MariaDB in `openshift/mariadb.yaml` |
+| Certbot | Not needed |
+
+The `Dockerfile` builds on Red Hat's UBI Node.js 22 image, which runs under
+OKD's restricted security policy with an arbitrary UID.  The manifests are in
+`openshift/`, and `/healthz` backs the readiness and liveness probes.
+
+### 1. Create the project and log in
+
+Create a PaaS project from the
+[Web Services portal](https://webservices-portal.web.cern.ch) (e.g. `cima`).
+Then open [paas.cern.ch](https://paas.cern.ch), choose **Copy login command**
+from the user menu, and run it:
+
+```bash
+oc login --token=<token> --server=https://api.paas.okd.cern.ch
+oc project cima
+```
+
+### 2. Provision the database
+
+**DBOD (recommended):** request a MySQL instance at
+[dbod.web.cern.ch](https://dbod.web.cern.ch).  DBOD handles backups.  You will
+get a host such as `dbod-cima.cern.ch`, a non-standard port such as `5500`, and
+an admin account.  Connect as that admin and create the application user.
+Unlike the VM install, the host must be `'%'` because connections come from the
+cluster:
+
+```sql
+CREATE USER 'cima_app'@'%' IDENTIFIED BY '<strong password>';
+GRANT SELECT, INSERT, UPDATE, DELETE, CREATE, DROP, INDEX, ALTER, REFERENCES
+    ON cima.* TO 'cima_app'@'%';
+```
+
+The schema and queries work on MySQL 8.  The one exception is
+`db/migrate-add-archived.sql`, which uses MariaDB-only syntax.  A fresh install
+doesn't need it.
+
+**In-cluster MariaDB (alternative):** create the `cima-mariadb` secret shown in
+the header of `openshift/mariadb.yaml`, then run `oc apply -f
+openshift/mariadb.yaml`.  You are responsible for backing up its volume.  Use
+`DB_HOST=cima-mariadb` and `DB_PORT=3306` below.
+
+### 3. Create the application secret
+
+```bash
+oc create secret generic cima-secrets \
+    --from-literal=SESSION_SECRET="$(openssl rand -hex 64)" \
+    --from-literal=DB_HOST=dbod-cima.cern.ch \
+    --from-literal=DB_PORT=5500 \
+    --from-literal=DB_USER=cima_app \
+    --from-literal=DB_PASSWORD='<strong password>' \
+    --from-literal=DB_NAME=cima
+```
+
+### 4. Build the image
+
+The BuildConfig builds the `Dockerfile` from GitHub inside the cluster.  If the
+repository is private, first create the source secret described in
+`openshift/buildconfig.yaml`.
+
+```bash
+oc apply -f openshift/imagestream.yaml -f openshift/buildconfig.yaml
+oc start-build cima --follow
+```
+
+### 5. Initialise the database
+
+```bash
+oc create -f openshift/setup-job.yaml
+oc logs -f job/cima-setup
+```
+
+This creates the schema and the default `admin` / `admin123` account.  Run it
+only once: running it again resets the admin password.
+
+### 6. Deploy and expose
+
+Edit `spec.host` in `openshift/route.yaml` to the site name you want (e.g.
+`cima.web.cern.ch`).  Or delete that line to get the default
+`cima-<project>.app.cern.ch`.  The route is annotated with
+`router.cern.ch/network-visibility: Internet` so schools outside CERN can reach
+it.  CERN PaaS routes are Intranet-only by default.
+
+```bash
+oc apply -f openshift/deployment.yaml -f openshift/service.yaml -f openshift/route.yaml
+oc rollout status deployment/cima
+```
+
+Log in at `/admin.html` and change the admin password straight away.
+
+### Deploying updates
+
+```bash
+oc start-build cima --follow    # the Deployment rolls out the new image automatically
+```
+
+### Sizing notes
+
+- Each pod uses up to `DB_POOL_SIZE` + 3 DB connections (18 by default).  With
+  2 replicas that is 36.  Check that the total fits your DBOD instance's
+  `max_connections` before raising `replicas`.
+- The Express login rate limiter keeps its counts in each pod's memory, so the
+  effective limit is 10 attempts per 15 minutes *per pod*.  The Nginx login
+  limit from the VM install does not apply on OKD.
+
+---
+
 ## Environment Variables
 
 Copy `.env.example` to `.env` and fill in all values before starting the server.
@@ -547,11 +665,14 @@ Copy `.env.example` to `.env` and fill in all values before starting the server.
 | Variable | Required | Description |
 |---|---|---|
 | `DB_HOST` | No | MariaDB host (default: `localhost`) |
+| `DB_PORT` | No | MariaDB port (default: `3306`; CERN DBOD instances use a custom port) |
 | `DB_USER` | No | Database user (default: `root`) |
 | `DB_PASSWORD` | No | Database password (default: empty) |
 | `DB_NAME` | No | Database name (default: `cima`) |
 | `SESSION_SECRET` | **Yes** (production) | Random string used to sign session cookies — generate with `openssl rand -hex 64` |
 | `PORT` | No | HTTP port the Node server listens on (default: `3000`) |
+| `HOST` | No | Bind address (default: `127.0.0.1` in production, all interfaces in development; the container image sets `0.0.0.0`) |
+| `DB_POOL_SIZE` | No | App DB connections per Node process (default: `15`) |
 | `NODE_ENV` | No | Set to `production` to enable HTTPS-only cookies and hide internal error details |
 
 ---
