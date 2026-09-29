@@ -88,7 +88,8 @@ const pool = mysql.createPool({
     connectionLimit:    parseInt(process.env.DB_POOL_SIZE, 10) || 15,   // per worker process
     queueLimit:         50,   // reject (don't hang) if >50 requests are waiting
     enableKeepAlive:    true,
-    keepAliveInitialDelay: 10000
+    keepAliveInitialDelay: 10000,
+    dateStrings: ['DATE']  // return DATE columns as 'YYYY-MM-DD' strings; leave TIMESTAMP as JS Date
 });
 
 // Log pool-level errors so they appear in PM2 logs instead of crashing silently
@@ -198,8 +199,8 @@ app.get('/api/masterclasses', async (req, res) => {
         const showAll = req.query.all === '1' && req.session && req.session.isAdmin;
         const [rows] = await pool.query(
             showAll
-                ? 'SELECT * FROM masterclasses ORDER BY archived ASC, created_at DESC'
-                : 'SELECT * FROM masterclasses WHERE archived = 0 ORDER BY created_at DESC'
+                ? 'SELECT * FROM masterclasses ORDER BY archived ASC, event_date DESC, name'
+                : 'SELECT * FROM masterclasses WHERE archived = 0 ORDER BY event_date DESC, name'
         );
         res.json(rows);
     } catch (err) {
@@ -220,20 +221,24 @@ app.get('/api/masterclasses/:id', async (req, res) => {
 });
 
 app.post('/api/masterclasses', requireAdmin, async (req, res) => {
-    const { name, num_datasets } = req.body;
-    if (!name || !num_datasets) {
-        return res.status(400).json({ error: 'Name and dataset count required' });
+    const { name, event_date, start_dataset, end_dataset } = req.body;
+    if (!name || !event_date || start_dataset == null || end_dataset == null) {
+        return res.status(400).json({ error: 'Name, date, start dataset, and end dataset required' });
     }
-    const n = parseInt(num_datasets);
-    if (isNaN(n) || n < 1 || n > 100) {
-        return res.status(400).json({ error: 'Dataset count must be 1–100' });
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(event_date)) {
+        return res.status(400).json({ error: 'Invalid date format (expected YYYY-MM-DD)' });
     }
+    const s = parseInt(start_dataset);
+    const e = parseInt(end_dataset);
+    if (isNaN(s) || s < 1 || s > 100) return res.status(400).json({ error: 'Start dataset must be 1–100' });
+    if (isNaN(e) || e < 1 || e > 100) return res.status(400).json({ error: 'End dataset must be 1–100' });
+    if (s > e) return res.status(400).json({ error: 'Start dataset must not exceed end dataset' });
     try {
         const [result] = await pool.query(
-            'INSERT INTO masterclasses (name, num_datasets) VALUES (?, ?)',
-            [name.trim(), n]
+            'INSERT INTO masterclasses (name, event_date, start_dataset, end_dataset) VALUES (?, ?, ?, ?)',
+            [name.trim(), event_date, s, e]
         );
-        res.json({ id: result.insertId, name: name.trim(), num_datasets: n });
+        res.json({ id: result.insertId, name: name.trim(), event_date, start_dataset: s, end_dataset: e });
     } catch (err) {
         apiError(res, 500, 'Server error', err);
     }
@@ -249,15 +254,23 @@ app.delete('/api/masterclasses/:id', requireAdmin, async (req, res) => {
 });
 
 app.patch('/api/masterclasses/:id', requireAdmin, async (req, res) => {
-    const { name } = req.body;
+    const { name, event_date, start_dataset, end_dataset } = req.body;
     if (!name || !name.trim()) return res.status(400).json({ error: 'Name is required' });
+    if (!event_date || !/^\d{4}-\d{2}-\d{2}$/.test(event_date)) {
+        return res.status(400).json({ error: 'Valid date is required (YYYY-MM-DD)' });
+    }
+    const s = parseInt(start_dataset);
+    const e = parseInt(end_dataset);
+    if (isNaN(s) || s < 1 || s > 100) return res.status(400).json({ error: 'Start dataset must be 1–100' });
+    if (isNaN(e) || e < 1 || e > 100) return res.status(400).json({ error: 'End dataset must be 1–100' });
+    if (s > e) return res.status(400).json({ error: 'Start dataset must not exceed end dataset' });
     try {
         const [result] = await pool.query(
-            'UPDATE masterclasses SET name = ? WHERE id = ?',
-            [name.trim(), req.params.id]
+            'UPDATE masterclasses SET name = ?, event_date = ?, start_dataset = ?, end_dataset = ? WHERE id = ?',
+            [name.trim(), event_date, s, e, req.params.id]
         );
         if (result.affectedRows === 0) return res.status(404).json({ error: 'Not found' });
-        res.json({ success: true, name: name.trim() });
+        res.json({ success: true });
     } catch (err) {
         apiError(res, 500, 'Server error', err);
     }

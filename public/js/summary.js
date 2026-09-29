@@ -38,6 +38,10 @@
     const chart4Container = document.getElementById('chart4-container');
     const hist4Controls   = document.getElementById('hist4-controls');
 
+    // Export buttons
+    const exportCsv2Btn   = document.getElementById('export-csv2-btn');
+    const exportCsv4Btn   = document.getElementById('export-csv4-btn');
+
     let hist2Chart = null;
     let hist4Chart = null;
     let twoLeptonMasses  = [];
@@ -54,6 +58,46 @@
         pageLoading.style.display = 'none';
         errorMsg.textContent      = msg;
         pageError.style.display   = 'block';
+    }
+
+    async function downloadCsv(allMasses, fsSet, filename) {
+        const rows = ['Final State,Mass (GeV)'];
+        for (const entry of (allMasses || [])) {
+            if (entry && entry.mass !== undefined && fsSet.has(entry.finalState)) {
+                const fs = entry.finalState.replace(/μ/g, 'mu').replace(/ν/g, 'nu');
+                rows.push(`${fs},${entry.mass}`);
+            }
+        }
+        const csvContent = '﻿' + rows.join('\r\n'); // BOM for Excel UTF-8 detection
+
+        // Use the File System Access API when available (Chrome/Edge) so the
+        // browser shows a native Save As dialog letting the user choose location.
+        if (window.showSaveFilePicker) {
+            try {
+                const handle = await window.showSaveFilePicker({
+                    suggestedName: filename,
+                    types: [{ description: 'CSV file', accept: { 'text/csv': ['.csv'] } }]
+                });
+                const writable = await handle.createWritable();
+                await writable.write(csvContent);
+                await writable.close();
+                return;
+            } catch (e) {
+                if (e.name === 'AbortError') return; // user cancelled the dialog
+                // Any other error: fall through to anchor download
+            }
+        }
+
+        // Fallback for Firefox / Safari: anchor-triggered download
+        const blob = new Blob([csvContent], { type: 'text/csv' });
+        const url  = URL.createObjectURL(blob);
+        const a    = document.createElement('a');
+        a.href     = url;
+        a.download = filename;
+        document.body.appendChild(a);
+        a.click();
+        document.body.removeChild(a);
+        URL.revokeObjectURL(url);
     }
 
     // ── Mode detection ─────────────────────────────────────────────────────────
@@ -276,10 +320,13 @@
         hist2Controls.style.display   = 'none';
         noMass2Msg.style.display      = 'block';
         chart2Container.style.display = 'none';
+        exportCsv2Btn.style.display   = 'none';
     } else {
         setAutoRange(hist2MinEl, hist2MaxEl, hist2BinEl, twoLeptonMasses);
         drawHistogram2();
         updateHist2Btn.addEventListener('click', drawHistogram2);
+        exportCsv2Btn.addEventListener('click', () =>
+            downloadCsv(masses, TWO_LEPTON_FS, 'Two Lepton Mass.csv'));
     }
 
     // ── Four-Lepton Histogram ──────────────────────────────────────────────────
@@ -287,10 +334,13 @@
         hist4Controls.style.display   = 'none';
         noMass4Msg.style.display      = 'block';
         chart4Container.style.display = 'none';
+        exportCsv4Btn.style.display   = 'none';
     } else {
         setAutoRange(hist4MinEl, hist4MaxEl, hist4BinEl, fourLeptonMasses);
         drawHistogram4();
         updateHist4Btn.addEventListener('click', drawHistogram4);
+        exportCsv4Btn.addEventListener('click', () =>
+            downloadCsv(masses, FOUR_LEPTON_FS, 'Four Lepton Mass.csv'));
     }
 
     // ── Histogram helpers ──────────────────────────────────────────────────────
@@ -422,4 +472,18 @@
         hist4Chart = new Chart(document.getElementById('mass-histogram-4'),
             makeChartConfig(labels, counts, title, binWidth));
     }
+
+    // ── Print support ──────────────────────────────────────────────────────────
+    // Lock chart canvas dimensions before the browser reflows for print,
+    // then restore responsive sizing afterwards.
+    document.getElementById('print-pdf-btn').addEventListener('click', () => window.print());
+
+    window.addEventListener('beforeprint', () => {
+        if (hist2Chart) hist2Chart.resize(520, 200);
+        if (hist4Chart) hist4Chart.resize(520, 200);
+    });
+    window.addEventListener('afterprint', () => {
+        if (hist2Chart) hist2Chart.resize();
+        if (hist4Chart) hist4Chart.resize();
+    });
 })();
