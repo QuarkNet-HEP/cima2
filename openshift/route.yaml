@@ -9,6 +9,9 @@ metadata:
     # Default visibility on CERN PaaS is Intranet (CERN network only).
     # Masterclass students connect from their schools, so expose to the Internet.
     router.cern.ch/network-visibility: Internet
+    # The platform adds a CERN-only IP allowlist to new routes; an empty value
+    # lifts it (removing the annotation doesn't, as it is re-added).
+    haproxy.router.openshift.io/ip_whitelist: ""
 spec:
   host: cima2.web.cern.ch
   to:
